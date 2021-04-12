@@ -170,6 +170,8 @@ Resources:
               ValueFrom: arn:aws:secretsmanager:us-east-1:038778514259:secret:utopiaJWTsecret-jNTyP0
             - Name: UT_MYSQL
               ValueFrom: arn:aws:secretsmanager:us-east-1:038778514259:secret:utopiaRDSrestricted-tVa9cZ
+            - Name: UT_STRIPE_API_KEY
+              ValueFrom: arn:aws:secretsmanager:us-east-1:038778514259:secret:utopiaStripe-74M1vX
           Essential: true
           Memory: 2048
           LogConfiguration:
