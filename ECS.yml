@@ -1,0 +1,229 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Utopia Airlines Demo Project Microservices Template.
+# Used to pass parameters from cli to CloudFormation. e.g. You can pass the Environment you are deploying to.
+# This is useful to implement conditions.
+Parameters:
+  ApplicationName:
+    Type: String
+    Default: UtopiaMSNameNotSet
+
+  # URI of Elastic Container Repository containing the latest Build Image
+  # Looks like: ${AWS_ID}/MyRepositoryProjectFolder/MyServive:${COMMIT_HASH}
+  ECRepositoryUri:
+    Type: String
+    Description: Full URI of Docker Image to run in container
+  # ARN of the Service's Execution Role (requires all read/write permissions of service needed)
+  # Looks like: "arn:aws:iam::${AWS_ID}:role/MyTaskExecutionRole"
+  ExecutionRoleArn:
+    Type: String
+  # Looks like: "arn:aws:elasticloadbalancing:us-east-1:${AWS_ID}:targetgroup/MyServiceTargetGroup/b410a0a203b09ac6"
+  TargetGroupArn:
+    Type: String
+
+Conditions:
+  FlightPlaneMS: !Equals [!Ref ApplicationName, FlightPlaneMS]
+  OrchestratorMS: !Equals [!Ref ApplicationName, OrchestratorMS]
+  UserAuthMS: !Equals [!Ref ApplicationName, UserAuthMS]
+  TicketPaymentMS: !Equals [!Ref ApplicationName, TicketPaymentMS]
+  DiscoveryMS: !Equals [!Ref ApplicationName, DiscoveryMS]
+
+Resources:
+  AppCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Join ["-", [!Ref ApplicationName, "Cluster"]]
+
+  ServicesSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ["", ["Ports open for: ", !Ref ApplicationName]]
+      GroupName: !Join ["-", [!Ref ApplicationName, "SG"]]
+      VpcId: vpc-087536cd8d073939b
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort:
+            !If [
+              FlightPlaneMS,
+              8081,
+              !If [
+                OrchestratorMS,
+                8080,
+                !If [
+                  UserAuthMS,
+                  8082,
+                  !If [TicketPaymentMS, 8083, !If [DiscoveryMS, 8761, 80]],
+                ],
+              ],
+            ]
+          ToPort:
+            !If [
+              FlightPlaneMS,
+              8081,
+              !If [
+                OrchestratorMS,
+                8080,
+                !If [
+                  UserAuthMS,
+                  8082,
+                  !If [TicketPaymentMS, 8083, !If [DiscoveryMS, 8761, 80]],
+                ],
+              ],
+            ]
+          CidrIp: 0.0.0.0/0
+
+  # Fargate Service
+  AppService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Ref ApplicationName
+      Cluster: !Ref AppCluster
+      TaskDefinition: !Ref AppTaskDefinition
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      DesiredCount: 1
+      LaunchType: FARGATE
+      LoadBalancers:
+        - ContainerName: !Join ["-", [!Ref ApplicationName, "Container"]]
+          ContainerPort:
+            !If [
+              FlightPlaneMS,
+              8081,
+              !If [
+                OrchestratorMS,
+                8080,
+                !If [
+                  UserAuthMS,
+                  8082,
+                  !If [TicketPaymentMS, 8083, !If [DiscoveryMS, 8761, 80]],
+                ],
+              ],
+            ]
+          TargetGroupArn: !Ref TargetGroupArn
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - subnet-0761ef60975967d3e
+          SecurityGroups:
+            - !Ref ServicesSecurityGroup
+
+  # Fargate Task Definition
+  AppTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ApplicationName}
+      RequiresCompatibilities:
+        - FARGATE
+      Memory: "2048"
+      Cpu: "1024"
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !Sub ${ExecutionRoleArn}
+      TaskRoleArn: !Ref TaskExecutionRole
+      ContainerDefinitions:
+        - Name: !Join ["-", [!Ref ApplicationName, "Container"]]
+          Image: !Ref ECRepositoryUri
+          PortMappings:
+            - ContainerPort:
+                !If [
+                  FlightPlaneMS,
+                  8081,
+                  !If [
+                    OrchestratorMS,
+                    8080,
+                    !If [
+                      UserAuthMS,
+                      8082,
+                      !If [TicketPaymentMS, 8083, !If [DiscoveryMS, 8761, 80]],
+                    ],
+                  ],
+                ]
+              Protocol: tcp
+          Environment:
+            - Name: UT_APP_PORT
+              Value:
+                !If [
+                  FlightPlaneMS,
+                  "8081",
+                  !If [
+                    OrchestratorMS,
+                    "8080",
+                    !If [
+                      UserAuthMS,
+                      "8082",
+                      !If [
+                        TicketPaymentMS,
+                        "8083",
+                        !If [DiscoveryMS, "8761", "80"],
+                      ],
+                    ],
+                  ],
+                ]
+            - Name: UT_EUREKA
+              Value: http://3.219.82.3:8761/eureka
+          Secrets:
+            - Name: UT_JWT
+              ValueFrom: arn:aws:secretsmanager:us-east-1:038778514259:secret:utopiaJWTsecret-jNTyP0
+            - Name: UT_MYSQL
+              ValueFrom: arn:aws:secretsmanager:us-east-1:038778514259:secret:utopiaRDSrestricted-tVa9cZ
+          Essential: true
+          Memory: 2048
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub /ecs/smoothstack/${ApplicationName}/prod
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+              awslogs-create-group: "true"
+
+  # Role with permissions that a task needs to do its job e.g. kinesis read, dynamo r/w, cloudwatch metrics
+  TaskPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "ECS-TaskPolicy-${ApplicationName}-prod"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          # Cloudwatch monitoring
+          - Effect: Allow
+            Action:
+              - cloudwatch:PutMetricData
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - logs:DescribeLogStreams
+            Resource:
+              - arn:aws:logs:*:*
+      Roles:
+        - !Ref TaskExecutionRole
+
+  #IAM for application container (task)
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "ECS-TaskExecutionRole-${ApplicationName}-prod"
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::038778514259:policy/GetSecretsKMS
+        - arn:aws:iam::038778514259:policy/GetSecretsSM
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        - arn:aws:iam::aws:policy/CloudWatchFullAccess
+      Tags:
+        - Key: ApplicationName
+          Value: !Ref ApplicationName
+        - Key: ApplicationEnvironment
+          Value: prod
