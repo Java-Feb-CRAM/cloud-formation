@@ -83,8 +83,8 @@ Resources:
       Cluster: !Ref AppCluster
       TaskDefinition: !Ref AppTaskDefinition
       DeploymentConfiguration:
-        MinimumHealthyPercent: 100
-        MaximumPercent: 200
+        MinimumHealthyPercent: 0
+        MaximumPercent: 100
       DesiredCount: 1
       LaunchType: FARGATE
       LoadBalancers:
