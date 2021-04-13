@@ -28,11 +28,6 @@ Conditions:
   DiscoveryMS: !Equals [!Ref ApplicationName, DiscoveryMS]
 
 Resources:
-  AppCluster:
-    Type: AWS::ECS::Cluster
-    Properties:
-      ClusterName: !Join ["-", [!Ref ApplicationName, "Cluster"]]
-
   ServicesSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -80,11 +75,11 @@ Resources:
     Type: AWS::ECS::Service
     Properties:
       ServiceName: !Ref ApplicationName
-      Cluster: !Ref AppCluster
+      Cluster: arn:aws:ecs:us-east-1:038778514259:cluster/UtopiaCluster
       TaskDefinition: !Ref AppTaskDefinition
       DeploymentConfiguration:
         MinimumHealthyPercent: 0
-        MaximumPercent: 100
+        MaximumPercent: 200
       DesiredCount: 1
       LaunchType: FARGATE
       LoadBalancers:
@@ -123,7 +118,7 @@ Resources:
       Cpu: "1024"
       NetworkMode: awsvpc
       ExecutionRoleArn: !Sub ${ExecutionRoleArn}
-      TaskRoleArn: !Ref TaskExecutionRole
+      TaskRoleArn: arn:aws:iam::038778514259:role/ECS-UtopiaTask
       ContainerDefinitions:
         - Name: !Join ["-", [!Ref ApplicationName, "Container"]]
           Image: !Ref ECRepositoryUri
@@ -181,51 +176,3 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
               awslogs-create-group: "true"
-
-  # Role with permissions that a task needs to do its job e.g. kinesis read, dynamo r/w, cloudwatch metrics
-  TaskPolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: !Sub "ECS-TaskPolicy-${ApplicationName}-prod"
-      PolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          # Cloudwatch monitoring
-          - Effect: Allow
-            Action:
-              - cloudwatch:PutMetricData
-            Resource: "*"
-          - Effect: Allow
-            Action:
-              - logs:CreateLogGroup
-              - logs:CreateLogStream
-              - logs:PutLogEvents
-              - logs:DescribeLogStreams
-            Resource:
-              - arn:aws:logs:*:*
-      Roles:
-        - !Ref TaskExecutionRole
-
-  #IAM for application container (task)
-  TaskExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "ECS-TaskExecutionRole-${ApplicationName}-prod"
-      AssumeRolePolicyDocument:
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - ecs-tasks.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::038778514259:policy/GetSecretsKMS
-        - arn:aws:iam::038778514259:policy/GetSecretsSM
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-        - arn:aws:iam::aws:policy/CloudWatchFullAccess
-      Tags:
-        - Key: ApplicationName
-          Value: !Ref ApplicationName
-        - Key: ApplicationEnvironment
-          Value: prod
